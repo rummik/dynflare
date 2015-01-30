@@ -1,0 +1,15 @@
+{
+	"source": {
+		"js": [
+			"bin/dynflare",
+			"lib/!(*_test).js"
+		],
+
+		"internal": [
+			"gulpfile.js",
+			"*.json",
+			"config/**/*.{js,json}",
+			"tasks/!(_*).js"
+		]
+	}
+}

@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+
+'use strict';
+
+var cloudflare = require('cloudflare');
+var nconf = require('nconf');
+var fs = require('fs');
+var os = require('os');
+
+nconf.argv({
+	email: {
+		alias: 'e',
+		description: 'Email address associated with CloudFlare account'
+	},
+
+	token: {
+		alias: 't',
+		description: 'CloudFlare API token'
+	},
+
+	config: {
+		alias: 'f',
+		description: 'Configuration file'
+	},
+
+	zone: {
+		alias: 'z',
+		description: 'Zone name'
+	},
+
+	record: {
+		alias: 'r',
+		default: os.hostname(),
+		description: 'Record name'
+	},
+
+	inet: {
+		alias: 'i',
+		description: 'Can be "6" (IPv6), "4" (IPv4), or "any"'
+	}
+});
+
+nconf.file(__dirname + '/default-config.json');
+
+if (nconf.get('config') && fs.existsSync(nconf.get('config'))) {
+	nconf.file(nconf.get('config'));
+}
+
+['email', 'token', 'zone', 'record'].forEach(function(option) {
+	if (!nconf.get(option)) {
+		process.exit();
+	}
+});
+
+var cf = cloudflare.createClient({
+	email: nconf.get('email'),
+	token: nconf.get('token')
+});
+
+var zone = nconf.get('zone');
+
+cf.listDomainRecords(zone, function(err, records) {
+	if (err) {
+		throw err;
+	}
+
+	var ttl = nconf.get('ttl');
+	var recordName = nconf.get('record');
+	var interfaces = os.networkInterfaces();
+
+	var _records = {
+		A: {
+			exists: false,
+			content: null
+		},
+
+		AAAA: {
+			exists: false,
+			content: null
+		}
+	};
+
+	Object.keys(interfaces).forEach(function(iface) {
+		interfaces[iface].forEach(function(ip) {
+			if (ip.family === 'IPv6' &&
+			    ip.address.substr(0, 4) !== 'fe80' &&
+			    ip.address !== '::1') {
+				_records.AAAA.content = ip.address;
+			}
+		});
+	});
+
+	records
+		.filter(function(record) {
+			return record.display_name === recordName &&
+			    (record.type === 'A' || record.type === 'AAAA');
+		})
+		.forEach(function(record) {
+			var _record = _records[record.type];
+			_record.exists = true;
+
+			if (record.content !== _record.content &&
+			    _record.content !== null) {
+				cf.editDomainRecord(
+					zone,
+					record.rec_id,
+
+					{
+						type: record.type,
+						name: record.display_name,
+						content: _record.content,
+						ttl: ttl,
+					},
+
+					function(err) {
+						if (err) {
+							return;
+						}
+
+						console.log('Updated', record.type, 'record on', recordName + '.' + zone);
+					}
+				);
+			} else {
+				console.log('Did not update', record.type, 'record on', recordName + '.' + zone);
+			}
+		});
+
+	Object.keys(_records).forEach(function(type) {
+		var record = _records[type];
+
+		if (record.exists === true || record.content === null) {
+			return;
+		}
+
+		cf.addDomainRecord(zone, {
+			type: type,
+			name: recordName,
+			content: record.content
+		});
+
+		console.log('Added', type, 'record on', recordName + '.' + zone);
+	});
+});
+
+// vim: set ft=javascript :
